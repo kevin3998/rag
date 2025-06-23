@@ -1,0 +1,6 @@
+*sqlite3 filter=lfs diff=lfs merge=lfs -text
+*bin filter=lfs diff=lfs merge=lfs -text
+extractor/checkpoint_extraction.json filter=lfs diff=lfs merge=lfs -text
+data/extracted_json/sturctured_info.json filter=lfs diff=lfs merge=lfs -text
+data/processed_text/processed_papers.json filter=lfs diff=lfs merge=lfs -text
+data/extracted_json/structured_info.json filter=lfs diff=lfs merge=lfs -text
