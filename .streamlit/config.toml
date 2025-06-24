@@ -1,0 +1,2 @@
+[server]
+folderWatchBlacklist = ['/opt/anaconda3/envs/rag/lib/python3.9/site-packages/torch']

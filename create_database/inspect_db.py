@@ -5,7 +5,7 @@ from pprint import pprint
 
 # --- 配置 ---
 # 确保这个路径指向您之前创建的数据库文件夹
-DB_PATH = "data/vector_db/chroma_db"
+DB_PATH = "../data/vector_db/chroma_db"
 
 
 # --- 主逻辑 ---

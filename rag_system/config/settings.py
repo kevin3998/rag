@@ -19,13 +19,14 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 SOURCE_DATA_PATH = PROJECT_ROOT / "data" / "processed_text" / "processed_papers.json"
 # VECTOR_DB_PATH 指向持久化向量数据库的存储位置
 VECTOR_DB_PATH = PROJECT_ROOT / "data" / "vector_db" / "chroma_db"
+SQL_DB_PATH = PROJECT_ROOT / "data" / "database" / "literature_materials.db"
 
 
 # --- 模型设置 (Models) ---
 # 用于问答生成的大语言模型 (LLM for Generation)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-LLM_MODEL_NAME = "Users/chenlintao/Desktop/models/Qwen3-14B"  # 或者 "gpt-3.5-turbo"
+LOCAL_LLM_MODEL_NAME = "qwen3-tuned:latest"
 
 # 用于将文本转换为向量的嵌入模型 (Embedding Model)
 # 注意：这里是包含了组织名称的、正确的Hugging Face模型ID
@@ -58,3 +59,7 @@ PROMPT_TEMPLATE = """
 问题:
 {question}
 """
+
+
+# 【新增】Agent配置
+AGENT_MAX_ITERATIONS = 7 # 智能体最大思考-行动循环次数，防止无限循环

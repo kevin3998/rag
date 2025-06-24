@@ -2,106 +2,93 @@ import streamlit as st
 import sys
 from pathlib import Path
 
-# 将项目根目录添加到Python路径中
+# --- 项目路径设置 ---
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
-# 确保这里的类名与您 qa_chain.py 文件中的一致
-from rag_system.generation.qa_chain import AdvancedQAChain
+# --- 导入核心组件 ---
+from rag_system.agent.agent_executor import MaterialScienceAgent
 from rag_system.config import settings
 
-# --- 页面配置 ---
-st.set_page_config(
-    page_title="膜材料科学RAG智能体",
-    page_icon="🧪",
-    layout="wide"
-)
-
-st.title("🧪 膜材料科学RAG智能体")
-# 使用您在Ollama中为模型取的名字
-st.caption(f"由本地模型 'qwen3-14b-f16:latest' 和 ChromaDB 提供支持")
+# --- 页面配置与组件加载 ---
+st.set_page_config(page_title="材料科学AI助手", page_icon="🧪", layout="wide")
 
 
-# --- 初始化与状态管理 ---
 @st.cache_resource
-def load_qa_chain():
+def load_agent():
     """
-    使用缓存加载QA链，避免每次页面重载时都重新初始化模型。
+    加载并缓存智能体实例。
+    【关键修改】移除了错误的 st.set_option 调用。
     """
-    try:
-        qa_chain_instance = AdvancedQAChain()
-        return qa_chain_instance
-    except Exception as e:
-        st.error(f"加载RAG系统失败: {e}")
-        st.stop()
+    return MaterialScienceAgent()
 
 
-qa_chain = load_qa_chain()
+st.title("🧪 材料科学AI助手")
+st.caption(f"由本地模型 '{settings.LOCAL_LLM_MODEL_NAME}' 驱动 (ReAct架构)")
+
+agent = load_agent()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # --- 侧边栏 ---
 with st.sidebar:
-    st.header("关于")
-    st.info("这是一个基于检索增强生成 (RAG) 的智能问答系统。")
-    st.markdown("""
-    **功能:**
-    - **日常对话**: 可以进行通用聊天。
-    - **专业问答**: 能基于本地“膜材料”文献库回答专业问题。
-    - **领域识别**: 当问题超出膜材料领域时，会礼貌地拒绝回答。
-    """)
-    if st.button("清除聊天记录"):
+    st.header("关于系统")
+    st.info("这是一个基于ReAct框架的AI助手，能够调用工具来回答专业问题。")
+    if st.button("清除聊天记录", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# --- 聊天界面 ---
-# 显示历史消息
+# --- 主聊天界面 ---
+# 1. 渲染所有历史消息
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
+        if message["role"] == "assistant" and message.get("think_process"):
+            with st.expander("查看AI思考过程", expanded=False):
+                st.markdown(message["think_process"], unsafe_allow_html=True)
         st.markdown(message["content"])
 
-# 接收新输入
-if prompt := st.chat_input("请就文献内容进行提问，或随意聊聊..."):
+# 2. 接收并处理新输入
+if prompt := st.chat_input("请输入您的问题..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # AI的回答区
     with st.chat_message("assistant"):
-        # 【关键优化】
-        # 1. 创建一个独立的、用于显示最终答案的占位符。
+        # 为实时渲染准备UI占位符
         answer_placeholder = st.empty()
+        with st.expander("AI思考过程", expanded=True) as think_process_expander:
+            log_placeholder = st.empty()
 
-        # 2. 使用 st.status 来独立显示“思考过程”。
-        with st.status("AI 正在思考...", expanded=True) as status:
-            full_response = ""
+        full_response = ""
+        think_process_log = ""
 
-            try:
-                # 3. 调用流式回答接口
-                stream = qa_chain.stream_answer(prompt)
+        try:
+            stream = agent.run(prompt)
+            for chunk in stream:
+                if "log" in chunk:
+                    think_process_log += chunk["log"].strip().replace('<', '&lt;').replace('>', '&gt;') + "\n\n"
+                    log_placeholder.markdown(think_process_log)
+                elif "output" in chunk:
+                    full_response += chunk["output"]
+                    answer_placeholder.markdown(full_response + "▌")
+        except Exception as e:
+            st.error(f"处理时出现错误: {e}", icon="🚨")
+            full_response = "抱歉，处理您的问题时出现了错误。"
 
-                for chunk in stream:
-                    # 4. 判断流输出的类型
-                    if isinstance(chunk, dict) and chunk.get("type") == "status":
-                        # 如果是状态信息，更新 status 组件的标签
-                        status.update(label=chunk["message"])
-                    else:
-                        # 如果是答案文本，累加并更新独立的答案占位符
-                        full_response += chunk
-                        answer_placeholder.markdown(full_response + "▌")
-
-                # 5. 流结束后，更新最终状态并折叠 status 组件
-                status.update(label="回答生成完毕！", state="complete", expanded=False)
-
-            except Exception as e:
-                status.update(label="处理时出现错误", state="error", expanded=False)
-                st.error(f"抱歉，处理您的问题时出现错误: {e}")
-                full_response = f"错误: {e}"
-
-        # 6. 在所有操作完成后，最终更新一次答案占位符，移除光标
+        # 流程结束后，最终更新UI
         answer_placeholder.markdown(full_response)
+        # 检查思考日志是否存在，再更新其最终状态
+        if think_process_log:
+            log_placeholder.markdown(think_process_log)
 
-    # 7. 将完整的、干净的最终答案存入聊天记录
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+    # 将本次交互的完整结果存入历史记录
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": full_response,
+        "think_process": think_process_log
+    })
+    # 使用rerun来确保UI状态正确刷新，并将新消息变为历史
+    st.rerun()

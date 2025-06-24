@@ -131,8 +131,8 @@ def main():
     IDE_RUN = True
 
     # --- Default values for IDE execution (Modify these as needed) ---
-    IDE_DEFAULT_SOURCE_JSON_PATH = "data/processed_text/processed_papers_test.json"
-    IDE_DEFAULT_VECTOR_DB_PATH = "data/vector_db/chroma_db"
+    IDE_DEFAULT_SOURCE_JSON_PATH = "../data/processed_text/processed_papers_test.json"
+    IDE_DEFAULT_VECTOR_DB_PATH = "../data/vector_db_test/chroma_db_test.db"
 
     if IDE_RUN:
         print("Running in IDE mode with hardcoded paths.")
