@@ -1,45 +1,63 @@
-import os
-# 必须先设置环境变量，再导入其他模块
-# os.environ["HF_ENDPOINT"] = "https://hf-mirror.com" # 如果您的网络稳定，可以注释掉这行
+# test_rag_loop.py
 
-# 这里的导入路径可能需要根据您的项目结构调整
-# 假设 test_rag_tool.py 在项目根目录
-from rag_system.generation.qa_chain import AdvancedQAChain
+import asyncio
+from rag_system.planner.planner import Planner
 
-def test_rag_path():
+
+async def test_planner_raw_output():
     """
-    这个函数只用于独立测试RAG链本身的功能。
+    这个测试函数将直接调用Planner，并打印出LLM返回的原始文本，
+    以便我们诊断为什么计划会生成失败。
     """
-    print("--- 正在独立测试RAG问答链 (AdvancedQAChain) ---")
-
-    # 为了进行最纯粹的测试，我们直接实例化这个链
-    # 它内部会加载检索器和LLM
-    qa_chain = AdvancedQAChain()
-
-    # 使用一个明确应该能找到结果的问题
-    test_query = "What are the properties of PVDF membrane?"
-
-    print(f"正在用问题 '{test_query}' 进行测试...")
-
-    full_response = ""
-
-    # 我们需要临时修改qa_chain，让它跳过路由，直接走RAG路径
-    # 最简单的方法是直接调用内部的rag_chain
-    # 注意：这里的 .rag_chain 是基于我上一条回复中最终代码的假设
-    if hasattr(qa_chain, 'rag_chain'):
-        for chunk in qa_chain.rag_chain.stream(test_query):
-            full_response += chunk
-    else:
-        print("错误：在AdvancedQAChain中未找到'rag_chain'组件，请检查您的qa_chain.py代码。")
+    print("--- 初始化Planner... ---")
+    try:
+        planner = Planner()
+    except Exception as e:
+        print(f"❌ 初始化Planner时发生错误: {e}")
         return
 
-    print("\n--- RAG工具独立测试完成 ---")
-    if "未能找到" in full_response or not full_response.strip():
-        print("❌ 测试失败：RAG链未能从数据库中检索到有效信息。")
-        print("   请检查: 1. `settings.py`中的VECTOR_DB_PATH是否正确？ 2. 数据库中是否有数据？ 3. `settings.py`中的RETRIEVER_K值是否过低？")
-    else:
-        print("✅ 测试成功！RAG链返回了以下内容：")
-        print(full_response)
+    query = "什么是PVDF"
+    print(f"\n--- 准备为以下问题生成计划: '{query}' ---")
+
+    # --- 关键诊断步骤 ---
+    # 我们将直接调用链的前半部分（prompt | llm），来捕获未经解析的原始输出
+    # 这能让我们看到LLM到底返回了什么
+    print("\n--- 1. 获取LLM的原始输出 (Raw Output) ---")
+    try:
+        # 构建部分链：仅包含提示和LLM
+        partial_chain = planner.prompt_template | planner.llm
+        raw_output = await partial_chain.ainvoke({"user_goal": query})
+        print("✅ 成功获取到LLM的原始响应:")
+        print("=" * 50)
+        print(raw_output)
+        print("=" * 50)
+
+    except Exception as e:
+        print(f"❌ 在调用LLM获取原始输出时发生严重错误: {e}")
+        print(
+            "   这通常意味着无法连接到Ollama服务或模型未加载。请检查Ollama是否正在运行，以及模型'qwen3-tuned:latest'是否已下载。")
+        return
+
+    # --- 正常的完整链调用，用于对比 ---
+    print("\n--- 2. 尝试完整的计划生成 (Full Planning) ---")
+    try:
+        # 为了方便，我们这里用一个简单的状态对象
+        from rag_system.state import AgentState
+        agent_state = AgentState(initial_query=query)
+
+        final_state = planner.generate_plan(agent_state)
+
+        if final_state.plan:
+            print("✅ 成功生成并解析了计划！")
+            # Pydantic模型可以直接导出为字典
+            print(final_state.plan.model_dump_json(indent=2))
+        else:
+            print("❌ 计划生成失败，但未抛出异常。这通常发生在解析器多次重试后仍然失败。")
+
+    except Exception as e:
+        print(f"❌ 在调用完整计划生成链时发生错误: {e}")
+
 
 if __name__ == "__main__":
-    test_rag_path()
+    # 使用asyncio.run来执行异步函数
+    asyncio.run(test_planner_raw_output())
