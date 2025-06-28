@@ -61,5 +61,9 @@ PROMPT_TEMPLATE = """
 """
 
 
-# 【新增】Agent配置
-AGENT_MAX_ITERATIONS = 7 # 智能体最大思考-行动循环次数，防止无限循环
+# Agent循环相关设置
+MAX_ITERATIONS = 5  # Agent最大循环次数，防止无限循环
+MAX_RETRIES = 2     # 单个工具的最大重试次数
+
+# 【新增】反思与决策相关设置
+REFLECTION_CONFIDENCE_THRESHOLD = 0.6

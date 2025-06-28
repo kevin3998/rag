@@ -19,10 +19,26 @@ class Plan(BaseModel):
     steps: List[Step] = Field(default_factory=list, description="构成计划的所有步骤列表。")
 
 
+class ReflectionOutput(BaseModel):
+    """
+    定义了LLM在进行反思时需要输出的Pydantic模型。
+    这只包含需要LLM生成的部分，不包含 step_id 等上下文信息。
+    """
+    critique: str = Field(..., description="对上一步执行结果的详细、批判性的评估。")
+    is_success: bool = Field(..., description="根据评估，判断上一步是否算成功。")
+    confidence: float = Field(..., description="对is_success判断的置信度，范围在0.0到1.0之间。")
+    suggestion: str = Field(..., description="基于评估，为下一步行动提出的具体建议。")
+    is_finished: bool = Field(..., description="判断整个任务是否已经完成，可以得出最终答案。")
+
 class Reflection(BaseModel):
-    critique: str = Field(..., description="对已执行步骤的评估意见。")
-    suggestion: str = Field(..., description="基于评估提出的下一步行动建议。")
-    is_finished: bool = Field(False, description="任务是否已经完成，可以得出最终答案。")
+    """
+    Represents the reflector's assessment of a single step's execution.
+    """
+    step_id: int = Field(..., description="The ID of the step being reflected upon.")
+    critique: str = Field(..., description="The LLM's critique of the step's outcome.")
+    is_success: bool = Field(..., description="Whether the Reflector deems the step successful.")
+    confidence: float = Field(..., description="The confidence score (0.0 to 1.0) in the success assessment.")
+    suggestion: str = Field(..., description="A suggestion for what to do next.")
 
 
 class Action(BaseModel):
@@ -40,8 +56,10 @@ class Action(BaseModel):
 class AgentState(BaseModel):
     initial_query: str = Field(..., description="用户输入的原始问题。")
     plan: Optional[Plan] = Field(None, description="由Planner生成的当前任务计划。")
-    history: List[Union[Reflection, Action]] = Field(default_factory=list,
-                                                     description="记录每一次的反思(Reflection)和决策(Action)历史。")
+
+    history: List[Union[Step, Reflection]] = Field(default_factory=list,
+                                                   description="记录每一次的执行步骤(Step)和对其的反思(Reflection)历史。")
+
     current_step_id: int = Field(1, description="指向当前正在执行或等待执行的步骤ID，从1开始。")
     final_answer: Optional[str] = Field(None, description="当任务完成时，生成的最终答案。")
 
@@ -58,3 +76,16 @@ class AgentState(BaseModel):
             step.result = result
             step.is_success = is_success
             step.error_message = error_message
+            self.history.append(step)
+
+    def get_next_step(self) -> Optional[Step]:
+        """获取当前计划中需要执行的下一步。"""
+        if self.is_plan_completed():
+            return None
+        return self.get_step_by_id(self.current_step_id)
+
+    def is_plan_completed(self) -> bool:
+        """检查计划中的所有步骤是否都已执行。"""
+        if not self.plan or not self.plan.steps:
+            return True  # 没有计划就等于计划已完成
+        return self.current_step_id > len(self.plan.steps)

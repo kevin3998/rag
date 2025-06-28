@@ -1,55 +1,36 @@
-# rag_system/decider/decider.py
+# rag_system/decider.py
 
-import json
-import re
-from langchain_ollama import ChatOllama
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
-
+from typing import Literal
+from rag_system.state import Reflection  # 确认是从state导入
 from rag_system.config import settings
-from rag_system.state import AgentState, Action, Reflection
-from rag_system.decider.prompt import PROMPT_TEMPLATE
+
+Decision = Literal["PROCEED", "RETRY", "REPLAN", "FINISH"]
 
 
 class Decider:
     def __init__(self):
-        self.llm = ChatOllama(model=settings.LOCAL_LLM_MODEL_NAME, temperature=0.0)
-        self.output_parser = PydanticOutputParser(pydantic_object=Action)
-        self.prompt_template = PromptTemplate(
-            template=PROMPT_TEMPLATE,
-            input_variables=["agent_state_str", "suggestion"],
-            partial_variables={"format_instructions": self.output_parser.get_format_instructions()}
-        )
-        print("✅ Decider initialized successfully.")
+        # 基于规则的Decider不需要LLM
+        print("✅ Rule-based Decider initialized successfully.")
 
-    def _extract_json_from_response(self, text: str) -> str:
-        # (这个函数与我们在其他模块中使用的完全相同)
-        match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-        if match: return match.group(1)
-        start_index = text.find('{')
-        end_index = text.rfind('}')
-        if start_index != -1 and end_index != -1 and end_index > start_index:
-            return text[start_index : end_index + 1]
-        raise ValueError("Response does not contain a valid JSON object.")
+    # 【核心修正】确保方法的参数是 reflection，类型是 Reflection
+    def decide(self, reflection: Reflection) -> Decision:
+        """
+        根据最新的反思结果，做出下一步的决定。
+        """
+        if not reflection:
+            print("⚠️ Decider received no reflection. Defaulting to REPLAN.")
+            return "REPLAN"
 
-    def _format_agent_state_for_prompt(self, agent_state: AgentState) -> str:
-        state_dict = agent_state.model_dump(exclude={'history'})
-        return json.dumps(state_dict, indent=2, ensure_ascii=False)
-
-    def decide(self, agent_state: AgentState) -> Action:
-        print("🤔 Decider starting to make a decision...")
-        latest_reflection = next((item for item in reversed(agent_state.history) if isinstance(item, Reflection)), None)
-        if not latest_reflection:
-            raise ValueError("Cannot make a decision without a reflection.")
-        agent_state_str = self._format_agent_state_for_prompt(agent_state)
-        suggestion = latest_reflection.suggestion
-        try:
-            prompt_value = self.prompt_template.invoke({"agent_state_str": agent_state_str, "suggestion": suggestion})
-            raw_output = self.llm.invoke(prompt_value).content
-            json_string = self._extract_json_from_response(raw_output)
-            action = self.output_parser.parse(json_string)
-            print(f"✅ Decider made a decision: {action.action_type} - Reason: {action.reasoning}")
-            return action
-        except Exception as e:
-            print(f"❌ Decider failed to make a valid decision: {e}")
-            return Action(action_type='FINISH', reasoning="决策模块遇到内部错误，安全起见终止任务。")
+        if reflection.is_success:
+            if reflection.confidence >= settings.REFLECTION_CONFIDENCE_THRESHOLD:
+                # 在state.py的Reflection中没有is_finished, 我们在Decider中判断
+                # 如果是最后一步成功了，也应该FINISH
+                if getattr(reflection, 'is_finished', False):
+                    return "FINISH"
+                return "PROCEED"
+            else:
+                print(f"⚠️ Low confidence success (Confidence: {reflection.confidence:.2f}), triggering a replan...")
+                return "REPLAN"
+        else:
+            print(f"❌ Execution failed, triggering a replan...")
+            return "REPLAN"
