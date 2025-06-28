@@ -1,7 +1,6 @@
 # rag_system/planner/prompt.py
 
-# 我们将回归到单一的、巨大的PROMPT_TEMPLATE，因为FewShotPromptTemplate遇到了同样的问题。
-# 但这次，我们使用一个不会被解析器误解的安全占位符。
+
 
 PROMPT_TEMPLATE = """
 # 角色与目标 (Role & Goal)
@@ -43,13 +42,13 @@ PROMPT_TEMPLATE = """
       "tool_name": "semantic_search_tool",
       "tool_input": {{
         "context": "__PREVIOUS_STEP_RESULT__",
-        "question": "根据以上论文列表，请总结TFN膜相对于TFC膜的核心优势。"
+        "query": "根据以上论文列表，请总结TFN膜相对于TFC膜的核心优势。"
       }},
       "reasoning": "第二步，使用多功能语义分析工具的'精读模式'，对第一步获得的、经过精确筛选的论文列表（由context传入）进行深入分析和总结，以回答用户的后半部分问题。"
     }}
   ]
 }}
+
 任务开始 (Task Begins)
 用户目标: {user_goal}
 """
-
