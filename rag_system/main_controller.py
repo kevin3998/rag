@@ -53,18 +53,34 @@ class MainController:
         self.chat_chain = chat_prompt | self.llm | StrOutputParser()
         print("✅ MainController initialized with advanced execution loop (Plan-Execute-Reflect-Decide).")
 
-    def _prepare_next_input(self, tool_input: Dict[str, Any], previous_step_result: str) -> Dict[str, Any]:
-        """动态地将上一步的结果注入到下一步的输入中。"""
-        prepared_input = {}
-        # 将上一步的结果序列化为字符串，以便注入
-        context_str = str(previous_step_result)
+    def _prepare_next_input(self, tool_input: Dict[str, Any], previous_step_result: Any) -> Dict[str, Any]:
+        """
+        一个通用的数据转换管道，负责处理步骤间的输入/输出不匹配问题。
+        """
+        prepared_input = tool_input.copy() # 创建一个副本以安全修改
 
-        for key, value in tool_input.items():
-            # 您原有的占位符是 __PREVIOUS_STEP_RESULT__，这里我们保持兼容
-            if isinstance(value, str) and "__PREVIOUS_STEP_RESULT__" in value:
-                prepared_input[key] = value.replace("__PREVIOUS_STEP_RESULT__", context_str)
+        # --- 规则1: 专门处理从 paper_finder_tool 到 semantic_search_tool 的数据流 ---
+        # 检查下一步的工具输入是否需要 paper_titles，并且占位符是 __PREVIOUS_STEP_RESULT__
+        if prepared_input.get("paper_titles") == "__PREVIOUS_STEP_RESULT__":
+            # 检查上一步结果是否为元组列表 (paper_finder_tool的典型输出)
+            if isinstance(previous_step_result, list) and all(isinstance(item, tuple) for item in previous_step_result):
+                # 从元组列表中只提取第一个元素（标题），并创建一个新的字符串列表
+                titles_only = [item[0] for item in previous_step_result if item and len(item) > 0]
+                print(f"--- [Data Transformer] Converted list of tuples to a list of {len(titles_only)} titles for 'paper_titles' parameter.")
+                prepared_input["paper_titles"] = titles_only # 用处理好的列表替换占位符
             else:
-                prepared_input[key] = value
+                # 如果上一步的结果不是预期的格式，为了安全起见，传递一个空列表，避免工具报错
+                print(f"--- [Data Transformer] Warning: Expected a list of tuples for 'paper_titles', but got {type(previous_step_result)}. Passing an empty list.")
+                prepared_input["paper_titles"] = []
+
+        # --- 规则2: 处理其他通用的 "__PREVIOUS_STEP_RESULT__" 占位符 ---
+        # 这个占位符用于将上一步的完整结果(通常是字符串)注入
+        for key, value in prepared_input.items():
+            if isinstance(value, str) and "__PREVIOUS_STEP_RESULT__" in value:
+                # 仅当这个键还没有被上面的特殊规则处理过时，才进行替换
+                if key != "paper_titles":
+                     prepared_input[key] = value.replace("__PREVIOUS_STEP_RESULT__", str(previous_step_result))
+
         return prepared_input
 
     def _clean_final_answer(self, text: str) -> str:
@@ -115,7 +131,7 @@ class MainController:
         # --- 阶段 2: 动态执行、反思与决策循环 ---
         yield "\n--- [阶段 2: 动态执行、反思与决策循环] ---"
         loop_count = 0
-        last_step_result = ""
+        last_step_result: Any = ""  # 明确类型为Any，因为它可能是任何工具的返回
 
         while loop_count < self.max_loops:
             loop_count += 1
@@ -128,16 +144,15 @@ class MainController:
 
             yield f"--- [执行步骤 {step_to_execute.step_id}/{len(agent_state.plan.steps)}] ---"
 
-            if step_to_execute.step_id > 1:
-                step_to_execute.tool_input = self._prepare_next_input(step_to_execute.tool_input, last_step_result)
+            # 【核心改动】在这里调用我们的数据转换管道，而不是在Executor内部
+            step_to_execute.tool_input = self._prepare_next_input(step_to_execute.tool_input, last_step_result)
 
             yield f"▶️ 执行工具: {step_to_execute.tool_name}"
             agent_state = self.executor.execute_step(agent_state)
             executed_step = agent_state.get_step_by_id(step_to_execute.step_id)
 
-            result_str = executed_step.result if executed_step.is_success else executed_step.error_message
-            yield f"  - 结果: {result_str}"
-            last_step_result = result_str
+            last_step_result = executed_step.result if executed_step.is_success else executed_step.error_message
+            yield f"  - 结果: {str(last_step_result)}"
 
             yield "🤔 进行反思..."
             agent_state = self.reflector.reflect(agent_state)
