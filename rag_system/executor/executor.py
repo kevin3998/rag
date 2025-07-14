@@ -1,64 +1,105 @@
 # rag_system/executor/executor.py
-from typing import Dict, Any
-from rag_system.state import AgentState
+
+from typing import Dict, Any, Tuple, Optional, List
+
+from rag_system.graph_state import GraphState, Step
+# ... (其他导入)
 from rag_system.agent.tools.semantic_search import semantic_search_tool
 from rag_system.agent.tools.paper_finder_tool import paper_finder_tool
 
+PREVIOUS_STEP_RESULT_PLACEHOLDER = "__PREVIOUS_STEP_RESULT__"
+
+
+# ================== [ 关 键 修 复 ] ==================
+# 重写占位符解析函数，使其能够处理嵌套的字典和列表（递归）
+def _resolve_placeholders(data: Any, last_result: Any) -> Any:
+    """
+    递归地解析数据结构（字典或列表）中的占位符。
+    """
+    if isinstance(data, dict):
+        # 如果是字典，递归地解析它的每一个值
+        return {key: _resolve_placeholders(value, last_result) for key, value in data.items()}
+    elif isinstance(data, list):
+        # 如果是列表，递归地解析它的每一个元素
+        return [_resolve_placeholders(item, last_result) for item in data]
+    elif data == PREVIOUS_STEP_RESULT_PLACEHOLDER:
+        # 如果元素本身就是占位符，替换它
+        print(f"    👉 Resolving placeholder with previous step's result.")
+        # 如果上一步结果是None（例如工具执行失败），返回一个安全的空值
+        return last_result if last_result is not None else []
+    else:
+        # 如果是其他类型，直接返回
+        return data
+
+
+# =====================================================
+
 
 class Executor:
+    # ... (Executor类的 __init__ 和 run_tool 方法无需修改) ...
     def __init__(self):
         self.tools: Dict[str, Any] = {
             semantic_search_tool.name: semantic_search_tool,
             paper_finder_tool.name: paper_finder_tool,
         }
-        print("✅ Executor initialized with final toolset:", list(self.tools.keys()))
+        print("✅ Executor initialized with toolset:", list(self.tools.keys()))
 
-    def execute_step(self, agent_state: AgentState) -> AgentState:
-        print(f"🤖 Executor starting to execute step ID: {agent_state.current_step_id}...")
-
-        if not agent_state.plan or agent_state.current_step_id is None:
-            print("⚠️ Executor skipped: No plan or current step ID found in state.")
-            return agent_state
-
-        step_to_execute = agent_state.get_step_by_id(agent_state.current_step_id)
-        if not step_to_execute:
-            print(f"❌ Executor failed: Step with ID {agent_state.current_step_id} not found.")
-            return agent_state
-
-        tool_to_call = self.tools.get(step_to_execute.tool_name)
+    def run_tool(self, tool_name: str, tool_input: dict) -> Tuple[Any, bool, Optional[str]]:
+        tool_to_call = self.tools.get(tool_name)
         if not tool_to_call:
-            error_msg = f"Tool '{step_to_execute.tool_name}' not found."
-            print(f"❌ {error_msg}")
-            agent_state.update_step_result(step_to_execute.step_id, error_msg, False, error_msg)
-            return agent_state
-
+            error_msg = f"Tool '{tool_name}' not found."
+            return None, False, error_msg
         try:
-            tool_input = step_to_execute.tool_input
-
-            # --- 【核心修改】智能判断工具输入类型 ---
-            # LangChain的@tool装饰器会自动处理参数传递
-            # 我们只需要把整个输入字典作为关键字参数传递进去即可
-            if isinstance(tool_input, dict):
-                result = tool_to_call.invoke(tool_input)
-            else:
-                # 为了兼容可能存在的、只接收单一字符串的简单工具
-                result = tool_to_call.invoke(str(tool_input))
-
-            # 检查工具是否返回了表明错误的字符串
-            is_success = True
-            error_message = None
+            result = tool_to_call.invoke(tool_input)
             if isinstance(result, str) and "出现错误:" in result:
-                is_success = False
-                error_message = result
-                print(f"⚠️ Step {step_to_execute.step_id} executed, but the tool reported a failure.")
-            else:
-                print(f"✅ Step {step_to_execute.step_id} executed successfully.")
-
-            agent_state.update_step_result(step_to_execute.step_id, str(result), is_success, error_message)
-
+                return result, False, result
+            print(f"✅ Tool '{tool_name}' executed successfully.")
+            return result, True, None
         except Exception as e:
-            error_msg = f"Error executing tool '{step_to_execute.tool_name}': {e}"
-            print(f"❌ {error_msg}")
-            agent_state.update_step_result(step_to_execute.step_id, error_msg, False, error_msg)
+            error_msg = f"Error executing tool '{tool_name}': {e}"
+            return None, False, error_msg
 
-        return agent_state
+
+def execute_node(state: GraphState, executor_instance: Executor) -> dict:
+    print("--- [节点: Executor] ---")
+
+    executed_steps_count = sum(1 for item in state['history'] if isinstance(item, Step))
+    plan = state['plan']
+
+    if not plan or executed_steps_count >= len(plan.steps):
+        print("⚠️ Executor Warning: All planned steps have been executed or no plan exists.")
+        return {}
+
+    step_to_execute = plan.steps[executed_steps_count]
+    tool_name = step_to_execute.tool_name
+
+    # [修改] 调用新的、更强大的占位符解析函数
+    last_successful_step_result = next(
+        (step.result for step in reversed(state['history']) if isinstance(step, Step) and step.is_success),
+        None
+    )
+
+    print(f"    Original input: {step_to_execute.tool_input}")
+    resolved_tool_input = _resolve_placeholders(step_to_execute.tool_input, last_successful_step_result)
+    print(f"    Resolved input: {resolved_tool_input}")
+
+    print(f"🤖 Executing step {step_to_execute.step_id}: Tool={tool_name}")
+
+    result, is_success, error_message = executor_instance.run_tool(tool_name, resolved_tool_input)
+
+    step_result = Step(
+        step_id=step_to_execute.step_id,
+        tool_name=tool_name,
+        tool_input=step_to_execute.tool_input,
+        reasoning=step_to_execute.reasoning,
+        result=result,
+        is_success=is_success,
+        error_message=error_message
+    )
+
+    history = state['history'] + [step_result]
+    error_count = state.get('error_count', 0)
+    if not is_success:
+        error_count += 1
+
+    return {"history": history, "error_count": error_count}

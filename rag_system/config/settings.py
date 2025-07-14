@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 SOURCE_DATA_PATH = PROJECT_ROOT / "data" / "processed_text" / "processed_papers.json"
 # VECTOR_DB_PATH 指向持久化向量数据库的存储位置
 VECTOR_DB_PATH = PROJECT_ROOT / "data" / "vector_db" / "chroma_db"
-SQL_DB_PATH = PROJECT_ROOT / "data" / "database" / "literature_materials.db"
+SQLITE_DB_PATH = PROJECT_ROOT / "data" / "database" / "literature_materials.db"
 
 
 # --- 模型设置 (Models) ---
@@ -67,3 +67,7 @@ MAX_RETRIES = 2     # 单个工具的最大重试次数
 
 # 【新增】反思与决策相关设置
 REFLECTION_CONFIDENCE_THRESHOLD = 0.6
+# ================== [ 关 键 新 增 ] ==================
+# 添加您的SQLite数据库文件的路径。
+# 请根据您的项目结构修改这个路径。
+# 假设您的数据库文件在 data/ 目录下。

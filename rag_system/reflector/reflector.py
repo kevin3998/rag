@@ -2,30 +2,41 @@
 
 import json
 import re
-from langchain_ollama import ChatOllama
+from pydantic import BaseModel, Field
+
+from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 
+from rag_system.graph_state import GraphState, Step, Reflection, Plan
 from rag_system.config import settings
-from rag_system.state import AgentState, Reflection  # 从state导入Reflection
 from rag_system.reflector.prompt import PROMPT_TEMPLATE
-from rag_system.state import ReflectionOutput  # 假设您有一个schema文件
+
+
+class ReflectionOutput(BaseModel):
+    critique: str = Field(description="对上一步执行结果的批判性评估。")
+    is_success: bool = Field(description="判断上一步是否成功达到了其预期目标。")
+    confidence: float = Field(description="对成功判断的置信度，范围0.0到1.0。")
+    suggestion: str = Field(description="基于评估，为下一步提出的具体建议。")
+    is_finished: bool = Field(description="判断整个任务是否已经完成。")
 
 
 class Reflector:
     def __init__(self):
         self.llm = ChatOllama(model=settings.LOCAL_LLM_MODEL_NAME, temperature=0.1)
-        # 注意：这里的pydantic_object应该是LLM直接输出的结构，而不是最终的Reflection对象
         self.output_parser = PydanticOutputParser(pydantic_object=ReflectionOutput)
+
+        # ================== [ 关 键 修 复 ] ==================
+        # 这里的变量名必须与invoke时使用的 "context_str" 保持一致
         self.prompt_template = PromptTemplate(
             template=PROMPT_TEMPLATE,
-            input_variables=["agent_state_str"],
+            input_variables=["context_str"],  # <--- 确保这里是 "context_str"
             partial_variables={"format_instructions": self.output_parser.get_format_instructions()}
         )
+        # =====================================================
         print("✅ Reflector initialized successfully.")
 
     def _extract_json_from_response(self, text: str) -> str:
-        # (这个函数与我们在其他模块中使用的完全相同)
         match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match: return match.group(1)
         start_index = text.find('{')
@@ -34,62 +45,47 @@ class Reflector:
             return text[start_index: end_index + 1]
         raise ValueError("Response does not contain a valid JSON object.")
 
-    def _format_agent_state_for_prompt(self, agent_state: AgentState) -> str:
-        # 只包含与反思相关的信息，减少token消耗
-        step_to_reflect = agent_state.get_step_by_id(agent_state.current_step_id)
-        state_for_prompt = {
-            "initial_query": agent_state.initial_query,
-            "plan": agent_state.plan.model_dump(include={'goal', 'steps'}),
-            "current_step_id": agent_state.current_step_id,
-            "step_to_reflect": step_to_reflect.model_dump() if step_to_reflect else None
+    def _format_context_for_prompt(self, initial_query: str, plan: Plan, step_to_reflect: Step) -> str:
+        context = {
+            "initial_query": initial_query,
+            "plan_goal": plan.goal,
+            "full_plan_steps": [s.model_dump(include={'step_id', 'tool_name', 'tool_input', 'reasoning'}) for s in
+                                plan.steps],
+            "step_to_reflect": step_to_reflect.model_dump()
         }
-        return json.dumps(state_for_prompt, indent=2, ensure_ascii=False)
+        return json.dumps(context, indent=2, ensure_ascii=False)
 
-    def reflect(self, agent_state: AgentState) -> AgentState:
-        """
-        对当前步骤的执行结果进行反思，并将结果添加到AgentState的历史记录中。
-        """
-        print("🤔 Reflector starting to reflect...")
-
-        # 获取当前需要反思的步骤
-        step_to_reflect = agent_state.get_step_by_id(agent_state.current_step_id)
-        if not step_to_reflect:
-            print("⚠️ Reflector: No step to reflect upon. Skipping.")
-            return agent_state
-
-        agent_state_str = self._format_agent_state_for_prompt(agent_state)
-
+    def generate_reflection(self, initial_query: str, plan: Plan, step_to_reflect: Step) -> Reflection:
+        print("🤔 Reflector starting to generate a reflection...")
+        context_str = self._format_context_for_prompt(initial_query, plan, step_to_reflect)
         try:
-            # --- 主流程 ---
-            prompt_value = self.prompt_template.invoke({"agent_state_str": agent_state_str})
+            prompt_value = self.prompt_template.invoke({"context_str": context_str})
             raw_output = self.llm.invoke(prompt_value).content
             json_string = self._extract_json_from_response(raw_output)
             parsed_output: ReflectionOutput = self.output_parser.parse(json_string)
-
-            # 【核心修正】将LLM的输出与步骤的元数据合并，创建完整的Reflection对象
-            reflection = Reflection(
-                step_id=step_to_reflect.step_id,
-                critique=parsed_output.critique,
-                is_success=parsed_output.is_success,
-                confidence=parsed_output.confidence,
-                suggestion=parsed_output.suggestion,
-                is_finished=parsed_output.is_finished  # 从LLM的输出中获取
-            )
-            print(f"✅ Reflection successful: {reflection.critique}")
-
+            reflection = Reflection(critique=parsed_output.critique, is_success=parsed_output.is_success,
+                                    confidence=parsed_output.confidence, suggestion=parsed_output.suggestion)
+            reflection.is_finished = parsed_output.is_finished
         except Exception as e:
-            # --- 备用方案 ---
             print(f"❌ Reflector failed to get a valid reflection from LLM: {e}")
-            # 【核心修正】创建备用Reflection对象时，提供所有必需的字段
             reflection = Reflection(
-                step_id=step_to_reflect.step_id,
-                critique="反思模块在尝试解析LLM输出时遇到内部错误。",
-                is_success=step_to_reflect.is_success,  # 直接沿用上一步的成功状态
-                confidence=0.0,  # 置信度为0
-                suggestion="建议重新规划以尝试不同的方法。",
-                is_finished=False  # 无法判断是否完成，默认为False
+                critique="反思模块在尝试解析LLM输出时遇到内部错误。这通常是由于上一步的工具执行失败导致的。",
+                is_success=False,
+                confidence=1.0,
+                suggestion="由于内部错误，建议立即重新规划以尝试不同的方法。",
             )
+            reflection.is_finished = False
+        return reflection
 
-        # 将新生成的反思对象添加到历史记录中
-        agent_state.history.append(reflection)
-        return agent_state
+
+def reflect_node(state: GraphState, reflector_instance: Reflector) -> dict:
+    print("--- [节点: Reflector] ---")
+    last_step = next((item for item in reversed(state['history']) if isinstance(item, Step)), None)
+    if not last_step:
+        print("❌ Reflector Error: No step found in history to reflect upon.")
+        return {}
+    reflection = reflector_instance.generate_reflection(initial_query=state['initial_query'], plan=state['plan'],
+                                                        step_to_reflect=last_step)
+    history = state['history'] + [reflection]
+    decision = "FINISH" if reflection.is_finished else "PROCEED"
+    return {"history": history, "decision": decision}
