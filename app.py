@@ -11,13 +11,13 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-# --- LangGraph 和 LangChain 核心导入 ---
+# --- LangChain 核心导入 ---
 from langgraph.graph import StateGraph, END
 from langgraph.pregel import Pregel
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
-# --- 导入我们所有的模块和状态定义 ---
-from rag_system.graph_state import GraphState
+# --- 导入我们所有的模块 ---
+from rag_system.graph_state import GraphState, Step
 from rag_system.planner.planner import Planner, plan_node
 from rag_system.executor.executor import Executor, execute_node
 from rag_system.reflector.reflector import Reflector, reflect_node
@@ -27,53 +27,74 @@ from rag_system.config import settings
 # --- 最终答案生成节点 ---
 from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
+
+# [修改] 我们不再需要 StrOutputParser
+# from langchain_core.output_parsers import StrOutputParser
 
 def generate_final_answer_node(state: GraphState) -> dict:
-    # ... (此函数保持不变) ...
+    """
+    生成最终答案节点
+    """
     print("--- [节点: Final Answer Generator] ---")
     llm = ChatOllama(model=settings.LOCAL_LLM_MODEL_NAME, temperature=0.1)
+
     prompt = PromptTemplate.from_template(
-        "你是一个科研助理，你需要根据用户的原始问题和系统的完整执行历史（包括之前的对话），生成一个完整、清晰且友好的最终答案。\n\n"
-        "【历史对话】:\n{chat_history}\n\n"
-        "【当前任务执行历史】:\n{history}\n\n"
-        "【用户当前问题】:\n{initial_query}\n\n"
-        "请根据以上所有信息，直接给出最终答案（不要包含任何思考过程或XML标签）:"
+        """# 角色
+        你是一个严谨的科研助理。你的任务是根据【最终检索结果】和用户的【原始问题】，生成一个清晰、准确的最终答案。
+
+        # 任务
+        1.  **分析问题类型**: 判断用户的【原始问题】是要求一个【列表】，还是要求一个【分析总结】。
+        2.  **忠实呈现**:
+            - 如果问题要求一个列表（例如，“找出所有...的论文”），你的回答应该直接、完整地列出【最终检索结果】中的所有项目，并可以附上一句总结，例如“根据您的条件，共找到 N 篇论文如下：”。
+            - 如果问题要求分析总结，请基于【最终检索结果】进行深入分析。
+        3.  **不要编造**: 你的所有回答都必须严格基于【最终检索结果】。
+
+        ---
+        【原始问题】:
+        {initial_query}
+        ---
+        【最终检索结果】:
+        {final_context}
+        ---
+        你的最终答案:
+        """
     )
-    chain = prompt | llm | StrOutputParser()
-    chat_history_str = "\n".join([f"{msg.type}: {msg.content}" for msg in state['chat_history']])
-    history_summary = "\n".join([str(item) for item in state['history']])
-    final_answer = chain.invoke({
+
+    # ================== [ 关 键 修 复 ] ==================
+    # 1. 我们的链现在只包含Prompt和LLM
+    chain = prompt | llm
+
+    # 2. 我们只将最后一步成功的结果作为最终上下文
+    last_successful_result = next(
+        (step.result for step in reversed(state['history']) if isinstance(step, Step) and step.is_success),
+        "未能从执行历史中找到任何有效结果。"
+    )
+
+    # 3. 调用链，得到的是一个AIMessage对象，而不是字符串
+    ai_message_result = chain.invoke({
         "initial_query": state['initial_query'],
-        "history": history_summary,
-        "chat_history": chat_history_str
+        "final_context": str(last_successful_result)
     })
+
+    # 4. 我们手动从AIMessage对象中提取内容字符串
+    final_answer = ai_message_result.content
+    # =====================================================
+
     return {"final_answer": final_answer}
 
 
-# --- 图的组装 ---
+# ... (build_agent_graph 和 Streamlit 的主逻辑保持不变) ...
 @st.cache_resource
 def build_agent_graph() -> Pregel:
-    """
-    构建并返回一个编译好的、可缓存的LangGraph智能代理。
-    """
     print("--- Initializing Agent Graph for the first time ---")
-
-    # 1. 先实例化需要共享工具的组件
     executor = Executor()
     tools = list(executor.tools.values())
-
-    # 2. [修改] 将工具列表传递给Planner
     planner = Planner(tools=tools)
     reflector = Reflector()
-
-    # 3. 绑定节点
     bound_plan_node = functools.partial(plan_node, planner_instance=planner)
     bound_execute_node = functools.partial(execute_node, executor_instance=executor)
     bound_reflect_node = functools.partial(reflect_node, reflector_instance=reflector)
-
-    # 4. 定义工作流
     workflow = StateGraph(GraphState)
     workflow.add_node("planner", bound_plan_node)
     workflow.add_node("executor", bound_execute_node)
@@ -87,13 +108,11 @@ def build_agent_graph() -> Pregel:
         "reflector", should_continue,
         {"replan": "planner", "continue_execute": "executor", END: "final_answer_generator"}
     )
-
     app = workflow.compile()
     print("✅ Agent graph compiled successfully!")
     return app
 
 
-# --- Streamlit 应用主逻辑 (保持不变) ---
 st.set_page_config(page_title="🔬 LangGraph RAG Agent", layout="wide")
 st.title("🔬 LangGraph RAG Agent")
 st.markdown("一个具备规划、执行、反思和记忆能力的智能研究助手。由您微调的Qwen3驱动。")

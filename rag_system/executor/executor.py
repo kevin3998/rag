@@ -2,8 +2,10 @@
 
 from typing import Dict, Any, Tuple, Optional, List
 
+from sklearn.ensemble._hist_gradient_boosting import predictor
+
 from rag_system.graph_state import GraphState, Step
-# ... (其他导入)
+from rag_system.agent.tools.prediction_tool import prediction_tool # <-- 导入新工具
 from rag_system.agent.tools.semantic_search import semantic_search_tool
 from rag_system.agent.tools.paper_finder_tool import paper_finder_tool
 
@@ -41,6 +43,7 @@ class Executor:
         self.tools: Dict[str, Any] = {
             semantic_search_tool.name: semantic_search_tool,
             paper_finder_tool.name: paper_finder_tool,
+            prediction_tool.name: prediction_tool,
         }
         print("✅ Executor initialized with toolset:", list(self.tools.keys()))
 

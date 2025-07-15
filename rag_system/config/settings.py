@@ -27,7 +27,7 @@ SQLITE_DB_PATH = PROJECT_ROOT / "data" / "database" / "literature_materials.db"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 LOCAL_LLM_MODEL_NAME = "qwen3-tuned:latest"
-
+PREDICTION_MODEL_NAME = "qwen3-8b-lora-quantized:latest"
 # 用于将文本转换为向量的嵌入模型 (Embedding Model)
 # 注意：这里是包含了组织名称的、正确的Hugging Face模型ID
 EMBEDDING_MODEL_NAME = "BAAI/bge-large-zh-v1.5"

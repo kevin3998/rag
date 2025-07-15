@@ -11,10 +11,13 @@ PROMPT_TEMPLATE = """
 {tools_description}
 ---
 【核心决策原则】
-1.  **信息检索策略**:
-    - **第一步 (精确查找)**: 总是先尝试使用 `paper_finder_tool` 来精确查找相关的论文标题列表。这是获取最相关信息最高效的方式。
-    - **第二步 (分析总结)**: 将上一步 `paper_finder_tool` 的结果（即使是空列表）作为 `context`，传递给 `semantic_search_tool`。`semantic_search_tool` 会利用这些标题（或在找不到时进行开放搜索）来查找详细内容，并进行最终的分析和总结。
-2.  **简单问题**: 如果用户的目标非常简单，可以直接使用 `semantic_search_tool` 进行一步开放式搜索和分析。
+1.  **查询策略（非常重要！）**:
+    - **优先精确**: 总是先尝试使用 `paper_finder_tool` 进行【最精确】的查询，包含所有你能从用户问题中推断出的参数（如 `material_name_like`, `min_year`, `solvent_name` 等）。
+    - **优雅降级**: 如果第一次精确查询失败了（历史记录会显示工具返回了空结果），你在【重新规划】时，必须放宽查询条件。例如，只保留最核心的 `material_name_like` 参数，去掉 `solvent_name` 等次要参数，再次调用 `paper_finder_tool`。
+    - **最终手段**: 如果所有 `paper_finder_tool` 的尝试都失败了，最后再使用 `semantic_search_tool` 进行开放式的语义搜索和分析。
+
+2.  **结果传递**: 如果一个步骤需要使用上一步的结果，请在 `tool_input` 中使用特殊占位符 `__PREVIOUS_STEP_RESULT__`。
+3.  **深度推理策略**: 如果用户的最终目标是进行【趋势预测】、【实验设计】或【深层因果推断】，你应该在通过其他工具收集完所有必要信息后，将最后一步规划为调用 `prediction_tool`，并将之前步骤的所有结果作为 `context` 传递给它。
 
 ---
 【历史对话】
