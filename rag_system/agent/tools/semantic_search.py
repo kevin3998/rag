@@ -1,4 +1,4 @@
-# rag_system/agent/tools/semantic_search.py
+# rag_system/agent/tools/semantic_search.py (已修复)
 
 from typing import Optional, List, Any
 from langchain_core.tools import tool
@@ -11,7 +11,7 @@ from rag_system.config import settings
 from rag_system.ingestion.embedding import get_embedding_function
 
 
-# --- 全局组件初始化 ---
+# --- 全局组件初始化 (保持不变) ---
 def get_tool_components():
     """Initializes and returns the core components for the tool."""
     try:
@@ -23,8 +23,6 @@ def get_tool_components():
         )
         llm = ChatOllama(model=settings.LOCAL_LLM_MODEL_NAME, temperature=0.1)
 
-        # ================== [ 关 键 升 级 ] ==================
-        # 我们现在使用一个为深度分析和推理设计的、更强大的Prompt
         reasoning_prompt = PromptTemplate.from_template(
             """# 角色
             你是一位顶尖的材料科学家，你的任务是基于下面提供的【相关文献摘要】，对用户的【核心问题】进行一次深入的、有逻辑的分析和推理。
@@ -44,9 +42,7 @@ def get_tool_components():
             你的分析与推理:
             """
         )
-        # 这个链现在是“推理链”而不是简单的“总结链”
         reasoning_chain = reasoning_prompt | llm
-        # =====================================================
 
         print("✅ semantic_search_tool components initialized successfully.")
         return vector_db, reasoning_chain
@@ -76,25 +72,43 @@ def semantic_search_tool(query: str, context: Optional[Any] = None) -> str:
 
     retrieved_context = ""
 
+    # ================== [ 关 键 修 复 ] ==================
     # 模式1: 基于上下文的精确检索 (最优先)
     if isinstance(context, list) and context:
         print(f"--- [Tool Log] semantic_search_tool: Activating 'Title Fetch' mode for {len(context)} titles.")
+        all_fetched_docs = []
         try:
             paper_titles = [str(item) for item in context if isinstance(item, str)]
             if paper_titles:
-                documents = vector_db.get(
-                    where={"title": {"$in": paper_titles}},
-                    include=["documents"]
-                ).get('documents', [])
-                if documents:
-                    retrieved_context = "\n\n---\n\n".join(documents)
-                    print(f"--- [Tool Log] Successfully fetched content for {len(documents)} document chunks.")
+                # 遍历标题列表，为每个标题单独进行检索
+                for title in paper_titles:
+                    print(f"    - Retrieving content for title: '{title[:50]}...'")
+                    # 使用 'where' 过滤器精确匹配单个标题
+                    docs_for_title = vector_db.get(
+                        where={"title": title},
+                        include=["documents"]
+                    ).get('documents', [])
+
+                    if docs_for_title:
+                        # 将这篇论文的所有文档块作为一个整体，用换行符连接起来
+                        paper_full_text = "\n".join(docs_for_title)
+                        # 在文档开头明确标注来源标题，帮助LLM区分
+                        all_fetched_docs.append(f"--- 内容来源: {title} ---\n{paper_full_text}")
+                        print(f"    - Found {len(docs_for_title)} chunks for this title.")
+                    else:
+                        print(f"    - No content found for title: '{title[:50]}...'")
+
+                if all_fetched_docs:
+                    # 使用特定的分隔符将不同论文的内容分开
+                    retrieved_context = "\n\n<<< --- NEW PAPER --- >>>\n\n".join(all_fetched_docs)
+                    print(f"--- [Tool Log] Successfully fetched content for {len(all_fetched_docs)} unique papers.")
                 else:
-                    print(f"--- [Tool Log] 根据标题列表未找到详细内容，将转为开放式搜索。")
+                    print(f"--- [Tool Log] 根据标题列表未找到任何详细内容，将转为开放式搜索。")
             else:
                 print(f"--- [Tool Log] 上下文列表为空，将转为开放式搜索。")
         except Exception as e:
             print(f"--- [Tool Warning] 根据标题检索时发生错误: {e}。将转为开放式搜索。")
+    # =====================================================
 
     # 模式2: 开放式搜索 (当没有有效上下文时)
     if not retrieved_context:

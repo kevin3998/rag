@@ -1,4 +1,4 @@
-# test_tools.py
+# test_tool.py
 # 这是一个用于独立测试您Agent框架中所有工具的脚本。
 # 请将此文件放置在您项目的根目录下运行。
 
@@ -17,7 +17,13 @@ try:
     from rag_system.agent.tools.paper_finder_tool import paper_finder_tool
     from rag_system.agent.tools.semantic_search import semantic_search_tool
     from rag_system.agent.tools.prediction_tool import prediction_tool
-
+    # ================== [ 诊断代码 ] ==================
+    from rag_system.config import settings
+    import os
+    print("\n" + "*"*20 + " [诊断信息] " + "*"*20)
+    print(f"test_tool.py 将要使用的数据库绝对路径是:\n{os.path.abspath(settings.SQLITE_DB_PATH)}")
+    print("*"*54 + "\n")
+    # =====================================================
     print("✅ 所有工具模块成功导入！")
 except ImportError as e:
     print(f"❌ 导入工具时发生错误: {e}")
@@ -63,21 +69,21 @@ def test_paper_finder():
     success_2 = isinstance(result_2, list) and len(result_2) == 0
     print_test_result("空结果路径 - 查找不存在的材料", success_2, result_2)
 
-    # --- 3. 多条件与limit测试 ---
-    # 根据您的诊断报告，这个查询应该能找到数据
+    # --- 3. 多条件与limit测试 (已修复) ---
+    # 在工具修复后，这个查询现在应该能成功找到数据
     case_3_input = {'solvent_name': 'NMP', 'max_contact_angle': 70, 'limit': 5}
     result_3 = paper_finder_tool.invoke(case_3_input)
-    # 预期：返回的列表长度小于等于5
-    success_3 = isinstance(result_3, list) and len(result_3) <= 5
-    print_test_result("多条件与limit测试", success_3, result_3)
+    # 预期：返回一个非空的列表，且长度小于等于5
+    success_3 = isinstance(result_3, list) and len(result_3) > 0 and len(result_3) <= 5
+    print_test_result("多条件与limit测试 (验证修复)", success_3, result_3)
 
     # --- 4. 核心参数缺失测试 ---
-    # 不提供 material_name_like
-    case_4_input = {'min_year': 2022}
+    # 不提供任何参数
+    case_4_input = {}
     result_4 = paper_finder_tool.invoke(case_4_input)
     # 预期：根据我们最新的健壮性设计，它应该返回空列表
     success_4 = isinstance(result_4, list) and len(result_4) == 0
-    print_test_result("核心参数缺失测试", success_4, result_4)
+    print_test_result("无参数调用测试", success_4, result_4)
 
 
 def test_semantic_search():
@@ -91,7 +97,7 @@ def test_semantic_search():
     success_1 = isinstance(result_1, str) and len(result_1) > 50
     print_test_result("模式1 - 开放式搜索", success_1, result_1)
 
-    # --- 2. 基于标题列表模式 ---
+    # --- 2. 基于标题列表模式 (已修复断言) ---
     # 我们使用您诊断报告中确认存在的标题
     titles = [
         "Alleviating Ultrafiltration Membrane Fouling Caused by Effluent Organic Matter Using Pre-Ozonation: A Perspective of EEM and Molecular Weight Distribution",
@@ -99,9 +105,12 @@ def test_semantic_search():
     ]
     case_2_input = {'query': "请分别总结这两篇论文的核心内容", 'context': titles}
     result_2 = semantic_search_tool.invoke(case_2_input)
-    # 预期：返回一段基于这两篇论文内容的总结
-    success_2 = isinstance(result_2, str) and "GO" in result_2 and "Kefir" in result_2
-    print_test_result("模式2 - 基于标题列表总结", success_2, result_2)
+    # ================== [ 关 键 修 复 ] ==================
+    # 预期：返回的总结应包含与标题相关的关键词，而不是之前错误的 "GO" 和 "Kefir"
+    # 我们检查与标题更相关的 "Fouling" (污染) 和 "Cellulose Nanocrystal" (纤维素纳米晶体)
+    success_2 = isinstance(result_2, str) and "Fouling" in result_2 and "Cellulose Nanocrystal" in result_2
+    # =====================================================
+    print_test_result("模式2 - 基于标题列表总结 (验证修复)", success_2, result_2)
 
     # --- 3. 空上下文模式 ---
     case_3_input = {'query': "总结", 'context': []}

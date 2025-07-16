@@ -35,14 +35,12 @@ def paper_finder_tool(
     print("--- [Tool: paper_finder_tool] 启动高级论文检索 ---")
 
     # ================== [ 关 键 修 复 ] ==================
-    # 增加一个“前置守卫”，确保核心查询参数存在。
-    # .strip()可以处理空字符串的情况。
-    if not material_name_like or not material_name_like.strip():
-        print("    - [Tool Log] 核心参数 'material_name_like' 未提供，查询终止。")
+    # 新的“前置守卫”：确保至少提供了一个查询条件。
+    if not material_name_like and min_year is None and max_contact_angle is None and not solvent_name:
+        print("    - [Tool Log] 错误：必须提供至少一个有效的查询参数。查询终止。")
         return []
-    # =====================================================
 
-    conn = sqlite3.connect(settings.SQLITE_DB_PATH)
+    conn = _get_db_connection()
     cursor = conn.cursor()
 
     base_query = """
@@ -53,26 +51,43 @@ def paper_finder_tool(
         LEFT JOIN Solvents s ON m.id = s.material_id
     """
 
-    # 我们总是以 material_name_like 作为查询的基础
-    conditions = ["m.material_name LIKE ?"]
-    params = [f'%{material_name_like}%']
+    conditions = []
+    params = []
+
+    # 动态地根据传入的参数构建查询条件和参数列表
+    if material_name_like and material_name_like.strip():
+        conditions.append("m.material_name LIKE ?")
+        params.append(f'%{material_name_like.strip()}%')
 
     if min_year is not None:
         conditions.append("p.year >= ?")
         params.append(min_year)
-    if max_contact_angle is not None:
-        conditions.append("perf.contact_angle < ?")
-        params.append(max_contact_angle)
-    if solvent_name:
-        conditions.append("s.name = ?")
-        params.append(solvent_name)
 
-    base_query += " WHERE " + " AND ".join(conditions)
-    base_query += " LIMIT ?"
+    if max_contact_angle is not None:
+        # 假设接触角在数据库中存储为文本，需要转换为数值类型进行比较
+        conditions.append("CAST(perf.contact_angle AS REAL) < ?")
+        params.append(max_contact_angle)
+
+    if solvent_name and solvent_name.strip():
+        conditions.append("s.name = ?")
+        params.append(solvent_name.strip())
+
+    # 只有在有查询条件时才添加WHERE子句
+    if conditions:
+        query = base_query + " WHERE " + " AND ".join(conditions)
+    else:
+        # 如果经过守卫后仍然没有有效条件（理论上不会，但作为保护），则返回空
+        return []
+
+    query += " LIMIT ?"
     params.append(limit)
 
+    print(f"    - [Tool Log] 执行SQL查询: {query}")
+    print(f"    - [Tool Log] 使用参数: {tuple(params)}")
+    # =====================================================
+
     try:
-        cursor.execute(base_query, tuple(params))
+        cursor.execute(query, tuple(params))
         results = cursor.fetchall()
 
         if not results:
@@ -89,4 +104,3 @@ def paper_finder_tool(
     finally:
         if conn:
             conn.close()
-
