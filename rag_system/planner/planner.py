@@ -1,8 +1,8 @@
-# rag_system/planner/planner.py
+# rag_system/planner/planner.py (结构化修复版)
 
 import json
 import re
-from typing import List, Dict, Any
+from typing import List
 from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
@@ -15,10 +15,9 @@ from rag_system.planner.prompt import PROMPT_TEMPLATE
 
 
 def _format_tools_description(tools: List[BaseTool]) -> str:
-    """[新增] 将工具列表格式化为详细的字符串描述。"""
+    """格式化工具列表，便于Planner识别。"""
     descriptions = []
     for tool in tools:
-        # 使用.schema()来获取Pydantic模型的JSON Schema
         schema = tool.args_schema.schema()
         props = schema.get('properties', {})
         required_params = schema.get('required', [])
@@ -38,24 +37,26 @@ def _format_tools_description(tools: List[BaseTool]) -> str:
 
 
 class Planner:
-    # [修改] __init__现在接收一个工具列表
     def __init__(self, tools: List[BaseTool]):
         self.llm = ChatOllama(model=settings.LOCAL_LLM_MODEL_NAME, temperature=0.0)
         self.output_parser = PydanticOutputParser(pydantic_object=Plan)
 
-        # [修改] 增加 tools_description 输入变量
+        # 🚀 [关键修复] 增加 query 和 context 两个输入变量
         self.prompt_template = PromptTemplate(
             template=PROMPT_TEMPLATE,
-            input_variables=["user_goal", "history_str", "chat_history_str", "tools_description"],
+            input_variables=[
+                "user_goal", "tools_description",
+                "history_str", "chat_history_str",
+                "query", "context"  # 新增
+            ],
         )
-        # [修改] 将格式化好的工具描述作为固定变量传入
         self.tools_description = _format_tools_description(tools)
         print("✅ Planner initialized with tool-aware prompt.")
 
-    # ... (_extract_json_from_response, _format_agent_history, _format_chat_history 方法保持不变) ...
     def _extract_json_from_response(self, text: str) -> str:
         match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-        if match: return match.group(1)
+        if match:
+            return match.group(1)
         start_index = text.find('{')
         end_index = text.rfind('}')
         if start_index != -1 and end_index != -1 and end_index > start_index:
@@ -63,21 +64,31 @@ class Planner:
         raise ValueError("Response does not contain a valid JSON object.")
 
     def _format_agent_history(self, history: list) -> str:
-        if not history: return "[]"
+        if not history:
+            return "[]"
         simplified_history = []
         for item in history:
             if isinstance(item, Step):
-                simplified_history.append(
-                    {"step_id": item.step_id, "tool_name": item.tool_name, "result": str(item.result)[:200] + '...',
-                     "is_success": item.is_success})
+                simplified_history.append({
+                    "step_id": item.step_id,
+                    "tool_name": item.tool_name,
+                    "result": str(item.result)[:200] + '...',
+                    "is_success": item.is_success
+                })
             elif isinstance(item, Reflection):
-                simplified_history.append({"critique": item.critique, "suggestion": item.suggestion})
+                simplified_history.append({
+                    "critique": item.critique,
+                    "suggestion": item.suggestion
+                })
         return json.dumps(simplified_history, indent=2, ensure_ascii=False)
 
     def _format_chat_history(self, chat_history: List[BaseMessage]) -> str:
-        if not chat_history: return "[]"
-        return json.dumps([{"role": msg.type, "content": msg.content} for msg in chat_history], indent=2,
-                          ensure_ascii=False)
+        if not chat_history:
+            return "[]"
+        return json.dumps([
+            {"role": msg.type, "content": msg.content}
+            for msg in chat_history
+        ], indent=2, ensure_ascii=False)
 
     def generate_plan(self, user_query: str, history: list, chat_history: List[BaseMessage]) -> Plan:
         print("🤔 Planner starting to generate a plan (with tool descriptions)...")
@@ -85,12 +96,16 @@ class Planner:
         agent_history_str = self._format_agent_history(history)
         chat_history_str = self._format_chat_history(chat_history)
 
+        # 🚀 [关键修复] 这里传入 query 和 context（先简化 context）
         prompt_value = self.prompt_template.invoke({
             "user_goal": user_query,
+            "tools_description": self.tools_description,
             "history_str": agent_history_str,
             "chat_history_str": chat_history_str,
-            "tools_description": self.tools_description  # [修改] 注入工具描述
+            "query": user_query,
+            "context": agent_history_str  # 可扩展为其他上下文
         })
+
         raw_output = self.llm.invoke(prompt_value).content
         json_string = self._extract_json_from_response(raw_output)
         plan = self.output_parser.parse(json_string)
@@ -107,10 +122,15 @@ def plan_node(state: GraphState, planner_instance: Planner) -> dict:
             history=state['history'],
             chat_history=state['chat_history']
         )
-        return {"plan": plan_result,
-                "history": state['history'] + [f"Log: Successfully generated a plan for '{plan_result.goal}'."]}
+        return {
+            "plan": plan_result,
+            "history": state['history'] + [f"Log: Successfully generated a plan for '{plan_result.goal}'."]
+        }
     except Exception as e:
         print(f"❌ Planner failed to generate a valid plan: {e}")
         error_count = state.get('error_count', 0) + 1
-        return {"plan": None, "history": state['history'] + [f"Error: Planner failed. Reason: {e}"],
-                "error_count": error_count}
+        return {
+            "plan": None,
+            "history": state['history'] + [f"Error: Planner failed. Reason: {e}"],
+            "error_count": error_count
+        }
